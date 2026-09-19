@@ -11,15 +11,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Ensure platform + build tools
-        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.0" || true
+      # The ubuntu runner ships the Android SDK; just make sure the platform we compile
+      # against is present. (android-actions/setup-android@v3 is unusable now - it calls
+      # `sdkmanager tools`, a package that no longer exists in cmdline-tools 16.)
+      - name: Ensure Android SDK packages
+        run: |
+          set -x
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKMGR=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          yes | "$SDKMGR" --install "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || true
+          ls "$ANDROID_HOME/platforms" 2>/dev/null || true
 
       - uses: gradle/actions/setup-gradle@v4
         with:
