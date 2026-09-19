@@ -69,11 +69,23 @@ class PatternsTest {
     }
 
     @Test fun pulseRateAndDutyAreHonoured() {
-        val slow = Patterns.waveform(Patterns.Kind.HOLD, 8.0, opt.copy(pulseHz = 2.0))
-        val fast = Patterns.waveform(Patterns.Kind.HOLD, 8.0, opt.copy(pulseHz = 3.0))
-        assertTrue("3 Hz fits more pulses than 2 Hz", peaks(fast).size > peaks(slow).size)
-        val mid = peaks(Patterns.waveform(Patterns.Kind.HOLD, 8.0, opt)).size
-        assertTrue("8 s at 2.5 Hz gives 18-20 pulses (got $mid)", mid in 18..20)
+        // measured on a ramped phase: holds are a fixed double tap, not a train
+        val slow = peaks(Patterns.waveform(Patterns.Kind.EXHALE, 6.0, opt.copy(pulseHz = 2.0))).size
+        val mid = peaks(Patterns.waveform(Patterns.Kind.EXHALE, 6.0, opt.copy(pulseHz = 2.5))).size
+        val fast = peaks(Patterns.waveform(Patterns.Kind.EXHALE, 6.0, opt.copy(pulseHz = 3.0))).size
+        assertTrue("3 Hz beats 2.5 Hz beats 2 Hz (got $slow/$mid/$fast)", fast > mid && mid > slow)
+
+        val w = Patterns.waveform(Patterns.Kind.EXHALE, 6.0, opt)   // 2.5 Hz: 400 ms period, 30% duty
+        assertEquals("first tap = 120 ms duty + the 72 ms boundary extension", 192L, w.timings[0])
+        assertEquals("gaps complete the period", 280L, w.timings[1])
+        assertEquals("later taps are the bare duty cycle", 120L, w.timings[2])
+    }
+
+    @Test fun holdCueIsIndependentOfPulseRate() {
+        for (hz in listOf(2.0, 2.5, 3.0)) {
+            val w = Patterns.waveform(Patterns.Kind.HOLD, 4.0, opt.copy(pulseHz = hz))
+            assertEquals("still a double tap at $hz Hz", 2, peaks(w).size)
+        }
     }
 
     @Test fun strengthScalesEveryAmplitude() {
