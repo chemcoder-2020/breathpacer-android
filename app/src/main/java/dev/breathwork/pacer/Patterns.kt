@@ -15,7 +15,6 @@ object Patterns {
     const val MAX_AMP = 140      // top of the ramp (was 255)
     const val HOLD_AMP = 55      // a hold should be a presence, not a challenge
     const val FREE_AMP = 60
-    const val MARKER_AMP = 90    // lifts the first pulse of an inhale so the start is felt
     const val SIGH_AMP = 110
     const val MAX_SEGMENTS = 60  // keep each waveform inside HAL limits
 
@@ -24,7 +23,7 @@ object Patterns {
         val pulseHz: Double = 2.5,   // 2-3 Hz reads as discrete taps rather than a buzz
         val duty: Double = 0.30,     // 30% on-time: the gaps are what make it feel pulsed
         val scale: Double = 0.55,    // fraction of the reference amplitudes
-        val markerPulse: Boolean = true,
+        val boundaryTap: Boolean = true,  // first tap of a phase is longer, marking the change
     )
 
     sealed class Block {
@@ -124,34 +123,39 @@ object Patterns {
      */
     fun waveform(kind: Kind, seconds: Double, opt: Options = Options()): Waveform {
         val ms = Math.round(seconds * 1000.0)
+        val single = { amp: Int -> if (ms <= 250) Waveform(longArrayOf(ms), intArrayOf(scaled(amp.toDouble(), opt.scale)))
+                                    else Waveform(longArrayOf(200L, ms - 200), intArrayOf(scaled(amp.toDouble(), opt.scale), 0)) }
         when (kind) {
-            Kind.FREE -> return Waveform(longArrayOf(200L),
-                intArrayOf(scaled(FREE_AMP.toDouble(), opt.scale)))
-            Kind.INHALE2 -> return Waveform(longArrayOf(120L),
-                intArrayOf(scaled(SIGH_AMP.toDouble(), opt.scale)))
+            Kind.FREE -> return single(FREE_AMP)          // one deliberate pulse per ~11 s breath
+            Kind.INHALE2 -> return Waveform(longArrayOf(120L, (ms - 120).coerceAtLeast(0)),
+                intArrayOf(scaled(SIGH_AMP.toDouble(), opt.scale), 0))
             else -> {}
         }
 
         val period = Math.round(1000.0 / opt.pulseHz).coerceAtLeast(120)
         val on = Math.max(40, Math.round(period * opt.duty))
         val off = (period - on).coerceAtLeast(40)
-        val pulses = maxOf(1, (ms / period).toInt())
+        val extra = if (opt.boundaryTap) Math.round(on * 0.6) else 0   // longer first tap = phase change
 
+        if (ms <= period + extra) {                    // too short to pulse: one level tap
+            return Waveform(longArrayOf(ms), intArrayOf(scaled((MIN_AMP + MAX_AMP) / 2.0, opt.scale)))
+        }
+
+        val pulses = maxOf(1, ((ms - extra) / period).toInt())
         val timings = ArrayList<Long>(pulses * 2)
         val amps = ArrayList<Int>(pulses * 2)
         for (i in 0 until pulses) {
             val t = if (kind == Kind.INHALE) (i + 0.5) / pulses else 1.0 - (i + 0.5) / pulses
-            var a: Double = when (kind) {
+            val a: Double = when (kind) {
                 Kind.HOLD, Kind.HOLD2 -> HOLD_AMP.toDouble()
                 else -> MIN_AMP + (MAX_AMP - MIN_AMP) * Math.pow(t, 0.8)
             }
-            if (opt.markerPulse && kind == Kind.INHALE && i == 0) {
-                a = Math.max(a, MARKER_AMP.toDouble())   // felt start on the inhale
-            }
-            timings += on.toLong(); amps += scaled(a, opt.scale)
-            timings += off.toLong(); amps += 0
+            timings += (on + if (i == 0) extra else 0).toLong()
+            amps += scaled(a, opt.scale)
+            timings += off.toLong()
+            amps += 0
         }
-        val pad = ms - pulses.toLong() * period      // trailing silence so the phase ends exactly
+        val pad = ms - (pulses.toLong() * period + extra)   // trailing silence: ends exactly on the phase
         if (pad > 0) timings[timings.size - 1] += pad
         return Waveform(timings.toLongArray(), amps.toIntArray())
     }
