@@ -190,11 +190,12 @@ class MainActivity : Activity() {
                         if (!running) break
                         vibrate(Patterns.waveform(ph.kind, ph.seconds))
                     }
-                    val elapsed = (SystemClock.elapsedRealtime() - phaseStart) / 1000
-                    val left = (phaseMs / 1000 - elapsed).coerceAtLeast(0)
+                    val elapsedSec = (SystemClock.elapsedRealtime() - phaseStart) / 1000
+                    val left = (phaseMs / 1000 - elapsedSec).coerceAtLeast(0)
+                    val toGo = ((totalMs - cum[i]) / 1000 - elapsedSec).coerceAtLeast(0)
                     runOnUiThread {
                         val cyc = if (ph.cycles > 0) " · cycle ${ph.cycle}/${ph.cycles}" else ""
-                        status.text = "${ph.kind.name.lowercase()}$cyc\n${left}s left · ${(totalMs - (cum[i] + Math.round(elapsed * 1000))) / 1000}s to go"
+                        status.text = "${ph.kind.name.lowercase()}$cyc\n${left}s left · ${toGo}s to go"
                     }
                 }
                 runOnUiThread { if (running) status.text = "Session complete — ${totalMs / 60000} min." }
