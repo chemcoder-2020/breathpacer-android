@@ -15,8 +15,29 @@ android {
         versionName = "1.1"
     }
 
+    signingConfigs {
+        // The pinned identity for this app, supplied by CI as a keystore secret. Every
+        // ephemeral debug key is a NEW app identity, so without this each build demands
+        // an uninstall before it will install.
+        create("stable") {
+            val path = System.getenv("BP_KEYSTORE")
+            if (path != null && java.io.File(path).exists()) {
+                storeFile = java.io.File(path)
+                storePassword = System.getenv("BP_STORE_PASSWORD")
+                keyAlias = System.getenv("BP_KEY_ALIAS")
+                keyPassword = System.getenv("BP_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
-        getByName("debug") { isMinifyEnabled = false }
+        getByName("debug") {
+            isMinifyEnabled = false
+            val path = System.getenv("BP_KEYSTORE")
+            if (path != null && java.io.File(path).exists()) {
+                signingConfig = signingConfigs.getByName("stable")
+            }
+        }
         getByName("release") { isMinifyEnabled = false }
     }
 

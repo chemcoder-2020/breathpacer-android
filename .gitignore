@@ -1,0 +1,8 @@
+# build artifacts and signing material never belong in the repo
+build-output/
+keystore/
+*.jks
+*.keystore
+*.apk
+.gradle/
+build/

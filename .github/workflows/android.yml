@@ -27,14 +27,36 @@ jobs:
           yes | "$SDKMGR" --install "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || true
           ls "$ANDROID_HOME/platforms" 2>/dev/null || true
 
+      - name: Decode the pinned signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.BP_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/breathpacer.jks"
+            echo "BP_KEYSTORE=$RUNNER_TEMP/breathpacer.jks" >> "$GITHUB_ENV"
+            echo "signing with:"
+            keytool -list -v -keystore "$RUNNER_TEMP/breathpacer.jks" \
+              -storepass "${{ secrets.BP_STORE_PASSWORD }}" | grep -E "Alias name|SHA256:" | head -4
+          else
+            echo "::warning::no keystore secret - falling back to an ephemeral debug key"
+          fi
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
       - name: Unit tests - ramp shapes and phase totals
+        env:
+          BP_STORE_PASSWORD: ${{ secrets.BP_STORE_PASSWORD }}
+          BP_KEY_ALIAS: ${{ secrets.BP_KEY_ALIAS }}
+          BP_KEY_PASSWORD: ${{ secrets.BP_KEY_PASSWORD }}
         run: gradle --no-daemon testDebugUnitTest --console=plain
 
       - name: Assemble debug APK
+        env:
+          BP_STORE_PASSWORD: ${{ secrets.BP_STORE_PASSWORD }}
+          BP_KEY_ALIAS: ${{ secrets.BP_KEY_ALIAS }}
+          BP_KEY_PASSWORD: ${{ secrets.BP_KEY_PASSWORD }}
         run: gradle --no-daemon assembleDebug --console=plain
 
       - name: Report test results
