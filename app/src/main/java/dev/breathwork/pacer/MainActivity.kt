@@ -36,6 +36,10 @@ class MainActivity : Activity() {
 
     private var selected = 2                     // 11:00 resonance - the anchor
     private var half = false
+    private var scale = 0.55                     // strength, persisted
+    private var pulseHz = 2.5                    // pulse rate, persisted
+    private lateinit var strengthLabel: TextView
+    private lateinit var rateButton: Button
     @Volatile private var running = false
     private var worker: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -45,6 +49,7 @@ class MainActivity : Activity() {
         vibrator = resolveVibrator()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(buildUi())
+        loadPrefs()
         refreshCapability()
     }
 
@@ -87,6 +92,28 @@ class MainActivity : Activity() {
             root.addView(b, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
+
+        val tune = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(16), 0, 0)
+        }
+        val softer = Button(this).apply { text = "−"; isAllCaps = false; setOnClickListener { bumpScale(-0.05) } }
+        strengthLabel = TextView(this).apply {
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        }
+        val louder = Button(this).apply { text = "+"; isAllCaps = false; setOnClickListener { bumpScale(0.05) } }
+        listOf(softer, strengthLabel, louder).forEach {
+            tune.addView(it, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        root.addView(tune)
+
+        rateButton = Button(this).apply {
+            isAllCaps = false
+            setOnClickListener { cycleRate() }
+        }
+        root.addView(rateButton, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -135,9 +162,42 @@ class MainActivity : Activity() {
         if (!running) {
             val p = Patterns.phases(Patterns.SLOTS[i], half)
             status.text = "${Patterns.SLOTS[i].time} ${Patterns.SLOTS[i].name}\n" +
-                "${p.size} phases · ${Patterns.totalMillis(p) / 60000} min" + if (half) " (half)" else ""
+                "${p.size} phases · ${Patterns.totalMillis(p) / 60000} min" + if (half) " (half)" else "" +
+                "\npulsed at $pulseHz Hz · strength ${Math.round(scale * 100)}%"
         }
     }
+
+    private fun prefs() = getSharedPreferences("breathpacer", MODE_PRIVATE)
+
+    private fun loadPrefs() {
+        scale = prefs().getFloat("scale", 0.55f).toDouble()
+        pulseHz = prefs().getFloat("pulseHz", 2.5f).toDouble()
+        refreshControls()
+    }
+
+    private fun bumpScale(d: Double) {
+        if (running) return
+        scale = (scale + d).coerceIn(0.15, 1.0)
+        prefs().edit().putFloat("scale", scale.toFloat()).apply()
+        refreshControls()
+    }
+
+    private fun cycleRate() {
+        if (running) return
+        val rates = doubleArrayOf(2.0, 2.5, 3.0)
+        val i = rates.indexOfFirst { Math.abs(it - pulseHz) < 0.01 }
+        pulseHz = rates[(i + 1) % rates.size]
+        prefs().edit().putFloat("pulseHz", pulseHz.toFloat()).apply()
+        refreshControls()
+    }
+
+    private fun refreshControls() {
+        strengthLabel.text = "Strength ${Math.round(scale * 100)}%"
+        rateButton.text = "Pulse $pulseHz Hz — tap to change"
+        if (!running) select(selected)
+    }
+
+    private fun opts() = Patterns.Options(pulseHz = pulseHz, scale = scale)
 
     private fun refreshCapability() {
         val amp = vibrator.hasAmplitudeControl()
@@ -179,7 +239,7 @@ class MainActivity : Activity() {
                         var next = 0L
                         while (running && SystemClock.elapsedRealtime() < phaseStart + phaseMs) {
                             if (SystemClock.elapsedRealtime() >= phaseStart + next) {
-                                vibrate(Patterns.waveform(Patterns.Kind.FREE, 0.2))
+                                vibrate(Patterns.waveform(Patterns.Kind.FREE, 0.2, opts()))
                                 pulses++
                                 next += 11_000L
                             }
@@ -188,7 +248,7 @@ class MainActivity : Activity() {
                     } else {
                         while (running && SystemClock.elapsedRealtime() < phaseStart) Thread.sleep(4)
                         if (!running) break
-                        vibrate(Patterns.waveform(ph.kind, ph.seconds))
+                        vibrate(Patterns.waveform(ph.kind, ph.seconds, opts()))
                     }
                     val elapsedSec = (SystemClock.elapsedRealtime() - phaseStart) / 1000
                     val left = (phaseMs / 1000 - elapsedSec).coerceAtLeast(0)
@@ -227,11 +287,11 @@ class MainActivity : Activity() {
     private fun testRamp() {
         if (running) return
         val ms = 3_000L
-        vibrate(Patterns.waveform(Patterns.Kind.INHALE, 3.0))
+        vibrate(Patterns.waveform(Patterns.Kind.INHALE, 3.0, opts()))
         status.text = "Test ramp: inhale swell 3 s, then exhale fade 4 s…"
         Thread {
             Thread.sleep(ms + 150)
-            vibrate(Patterns.waveform(Patterns.Kind.EXHALE, 4.0))
+            vibrate(Patterns.waveform(Patterns.Kind.EXHALE, 4.0, opts()))
             Thread.sleep(4_150)
             runOnUiThread { status.text = "That was the shape: swell in, fade out." }
         }.also { it.isDaemon = true; it.start() }

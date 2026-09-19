@@ -8,11 +8,24 @@ package dev.breathwork.pacer
  */
 object Patterns {
 
-    const val MIN_AMP = 40      // still clearly felt; 0 would drop the cue mid-breath
-    const val MAX_AMP = 255     // hardware maximum
-    const val HOLD_AMP = 80     // steady, low - a hold should be a presence, not a buzz
-    const val FREE_AMP = 90
-    const val MAX_SEGMENTS = 60 // keep each waveform well inside HAL segment limits
+    // Amplitudes are a 0-255 hardware scale. These are the reference levels at 100%
+    // strength; the app scales them down from here (default 55%), because full-scale
+    // 255 played continuously was reported as far too strong on a Pixel.
+    const val MIN_AMP = 20       // bottom of the ramp - still felt, never silent
+    const val MAX_AMP = 140      // top of the ramp (was 255)
+    const val HOLD_AMP = 55      // a hold should be a presence, not a challenge
+    const val FREE_AMP = 60
+    const val MARKER_AMP = 90    // lifts the first pulse of an inhale so the start is felt
+    const val SIGH_AMP = 110
+    const val MAX_SEGMENTS = 60  // keep each waveform inside HAL limits
+
+    /** Pulse train + intensity. Adjustable on the device; persisted there. */
+    data class Options(
+        val pulseHz: Double = 2.5,   // 2-3 Hz reads as discrete taps rather than a buzz
+        val duty: Double = 0.30,     // 30% on-time: the gaps are what make it feel pulsed
+        val scale: Double = 0.55,    // fraction of the reference amplitudes
+        val markerPulse: Boolean = true,
+    )
 
     sealed class Block {
         data class Cycle(val inS: Double, val hold: Double, val outS: Double, val hold2: Double, val count: Int) : Block()
@@ -79,38 +92,67 @@ object Patterns {
     data class Waveform(val timings: LongArray, val amplitudes: IntArray) {
         val totalMs: Long get() = timings.sum()
         val segments: Int get() = timings.size
+
+        /** Peak amplitude of each pulse - the envelope the hand reads as the "path". */
+        val pulsePeaks: List<Int>
+            get() {
+                val out = ArrayList<Int>()
+                var i = 0
+                while (i < amplitudes.size) {
+                    if (amplitudes[i] > 0) {
+                        var peak = amplitudes[i]
+                        while (i < amplitudes.size && amplitudes[i] > 0) {
+                            peak = maxOf(peak, amplitudes[i]); i++
+                        }
+                        out += peak
+                    } else i++
+                }
+                return out
+            }
     }
 
+    private fun scaled(amp: Double, scale: Double): Int =
+        (amp * scale).toInt().coerceIn(10, 255)
+
     /**
-     * Real amplitude envelope for one phase.
+     * A PULSED amplitude ramp for one phase.
      *
-     * The inhale runs MIN_AMP -> MAX_AMP on a slightly convex curve (perceived intensity
-     * lags amplitude, so easing keeps the swell smooth rather than back-loaded); the exhale
-     * mirrors it. Segment length adapts to the phase (25-133 ms) so a slow 8 s exhale gets
-     * a genuinely gradual ramp instead of a stepped buzz.
+     * The envelope rides on the peak of each pulse rather than on a continuous vibration:
+     * an inhale climbs pulse by pulse, an exhale falls, a hold stays level. Period is
+     * `1000/pulseHz` with `duty` on-time, and the train is padded at the end so the
+     * durations always sum to the exact phase length - the next phase starts on the beat.
      */
-    fun waveform(kind: Kind, seconds: Double): Waveform {
+    fun waveform(kind: Kind, seconds: Double, opt: Options = Options()): Waveform {
         val ms = Math.round(seconds * 1000.0)
         when (kind) {
-            Kind.FREE -> return Waveform(longArrayOf(200L), intArrayOf(FREE_AMP))
-            Kind.INHALE2 -> return Waveform(longArrayOf(120L), intArrayOf(180))
-            Kind.HOLD, Kind.HOLD2 -> return Waveform(longArrayOf(ms), intArrayOf(HOLD_AMP))
+            Kind.FREE -> return Waveform(longArrayOf(200L),
+                intArrayOf(scaled(FREE_AMP.toDouble(), opt.scale)))
+            Kind.INHALE2 -> return Waveform(longArrayOf(120L),
+                intArrayOf(scaled(SIGH_AMP.toDouble(), opt.scale)))
             else -> {}
         }
-        val stepTarget = (ms / MAX_SEGMENTS.toDouble()).coerceIn(25.0, 133.0)
-        val n = maxOf(2, Math.ceil(ms / stepTarget).toInt()).coerceAtMost(MAX_SEGMENTS)
-        val base = ms / n
-        val timings = LongArray(n)
-        val amps = IntArray(n)
-        var acc = 0L
-        for (i in 0 until n) {
-            val t = if (kind == Kind.INHALE) (i + 1).toDouble() / n else 1.0 - i.toDouble() / n
-            val eased = Math.pow(t, 0.8)
-            amps[i] = (MIN_AMP + (MAX_AMP - MIN_AMP) * eased).toInt().coerceIn(1, 255)
-            timings[i] = base
-            acc += base
+
+        val period = Math.round(1000.0 / opt.pulseHz).coerceAtLeast(120)
+        val on = Math.max(40, Math.round(period * opt.duty))
+        val off = (period - on).coerceAtLeast(40)
+        val pulses = maxOf(1, (ms / period).toInt())
+
+        val timings = ArrayList<Long>(pulses * 2)
+        val amps = ArrayList<Int>(pulses * 2)
+        for (i in 0 until pulses) {
+            val t = if (kind == Kind.INHALE) (i + 0.5) / pulses else 1.0 - (i + 0.5) / pulses
+            var a: Double = when (kind) {
+                Kind.HOLD, Kind.HOLD2 -> HOLD_AMP.toDouble()
+                else -> MIN_AMP + (MAX_AMP - MIN_AMP) * Math.pow(t, 0.8)
+            }
+            if (opt.markerPulse && kind == Kind.INHALE && i == 0) {
+                a = Math.max(a, MARKER_AMP.toDouble())   // felt start on the inhale
+            }
+            timings += on.toLong(); amps += scaled(a, opt.scale)
+            timings += off.toLong(); amps += 0
         }
-        timings[n - 1] += ms - acc   // absorb rounding so the waveform ends exactly on the phase
-        return Waveform(timings, amps)
+        val pad = ms - pulses.toLong() * period      // trailing silence so the phase ends exactly
+        if (pad > 0) timings[timings.size - 1] += pad
+        return Waveform(timings.toLongArray(), amps.toIntArray())
     }
 }
