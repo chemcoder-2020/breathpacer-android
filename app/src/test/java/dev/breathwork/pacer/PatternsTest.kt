@@ -11,16 +11,29 @@ class PatternsTest {
 
     private fun peaks(w: Patterns.Waveform) = w.pulsePeaks
 
-    @Test fun everyPhaseIsPulsedNotContinuous() {
+    @Test fun everyPhaseHasRealSilence() {
         for (slot in Patterns.SLOTS) {
             for (p in Patterns.phases(slot)) {
-                // FREE and INHALE2 are single deliberate pulses, not a train
                 if (p.kind == Patterns.Kind.FREE || p.kind == Patterns.Kind.INHALE2) continue
                 val w = Patterns.waveform(p.kind, p.seconds, opt)
-                val offSegments = w.amplitudes.count { it == 0 }
-                assertTrue("${slot.id} ${p.kind}: needs silent gaps (off=$offSegments)",
-                    offSegments >= 2)
+                val silentMs = w.timings.filterIndexed { i, _ -> w.amplitudes[i] == 0 }.sum()
+                assertTrue("${slot.id} ${p.kind}: pulsed, not continuous (silent ${silentMs}ms of ${w.totalMs})",
+                    silentMs >= w.totalMs / 5)
             }
+        }
+    }
+
+    @Test fun holdsAreAFirmDoubleTapThenSilence() {
+        for (secs in listOf(4.0, 7.0)) {
+            val w = Patterns.waveform(Patterns.Kind.HOLD, secs, opt)
+            assertEquals("fills the phase", Math.round(secs * 1000.0), w.totalMs)
+            val pk = peaks(w)
+            assertEquals("exactly two taps", 2, pk.size)
+            assertEquals("both taps the same strength", 1, pk.distinct().size)
+            assertTrue("firm, not a whisper (got ${pk.first()})", pk.first() >= 40)
+            assertTrue("taps are short", w.timings[0] <= 150L && w.timings[2] <= 150L)
+            val silence = w.timings.last()
+            assertTrue("the rest of the hold is quiet (${silence}ms)", silence > w.totalMs * 6 / 10)
         }
     }
 

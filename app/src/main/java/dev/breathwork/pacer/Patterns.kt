@@ -13,7 +13,9 @@ object Patterns {
     // 255 played continuously was reported as far too strong on a Pixel.
     const val MIN_AMP = 20       // bottom of the ramp - still felt, never silent
     const val MAX_AMP = 140      // top of the ramp (was 255)
-    const val HOLD_AMP = 55      // a hold should be a presence, not a challenge
+    const val HOLD_TAP_AMP = 170 // a hold is marked by a firm double tap...
+    const val HOLD_TAP_MS = 80   // ...each tap this long...
+    const val HOLD_GAP_MS = 100  // ...separated by this much, then silence
     const val FREE_AMP = 60
     const val SIGH_AMP = 110
     const val MAX_SEGMENTS = 60  // keep each waveform inside HAL limits
@@ -129,6 +131,15 @@ object Patterns {
             Kind.FREE -> return single(FREE_AMP)          // one deliberate pulse per ~11 s breath
             Kind.INHALE2 -> return Waveform(longArrayOf(120L, (ms - 120).coerceAtLeast(0)),
                 intArrayOf(scaled(SIGH_AMP.toDouble(), opt.scale), 0))
+            // A hold gets a firm DOUBLE TAP and then silence. Nothing should keep buzzing
+            // while you are not breathing, and the quiet makes the next phase's cue sharp.
+            Kind.HOLD, Kind.HOLD2 -> {
+                val tail = (ms - (HOLD_TAP_MS * 2 + HOLD_GAP_MS)).coerceAtLeast(0)
+                val tap = scaled(HOLD_TAP_AMP.toDouble(), opt.scale)
+                return Waveform(
+                    longArrayOf(HOLD_TAP_MS.toLong(), HOLD_GAP_MS.toLong(), HOLD_TAP_MS.toLong(), tail),
+                    intArrayOf(tap, 0, tap, 0))
+            }
             else -> {}
         }
 
@@ -146,10 +157,7 @@ object Patterns {
         val amps = ArrayList<Int>(pulses * 2)
         for (i in 0 until pulses) {
             val t = if (kind == Kind.INHALE) (i + 0.5) / pulses else 1.0 - (i + 0.5) / pulses
-            val a: Double = when (kind) {
-                Kind.HOLD, Kind.HOLD2 -> HOLD_AMP.toDouble()
-                else -> MIN_AMP + (MAX_AMP - MIN_AMP) * Math.pow(t, 0.8)
-            }
+            val a: Double = MIN_AMP + (MAX_AMP - MIN_AMP) * Math.pow(t, 0.8)
             timings += (on + if (i == 0) extra else 0).toLong()
             amps += scaled(a, opt.scale)
             timings += off.toLong()

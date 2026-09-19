@@ -12,19 +12,24 @@ app with the `VIBRATE` permission, so this is it.
 
 ## What it does
 
-7 slots matching the daily schedule, each phase played as a single amplitude-envelope waveform:
+7 slots matching the daily schedule, each phase played as a single `VibrationEffect` waveform:
 
-| Phase | Envelope |
+| Phase | Cue |
 |---|---|
-| Inhale | amplitude ramps `40 → 255` on a `t^0.8` curve (a swell) |
-| Exhale | `255 → 40`, mirrored (a fade) |
-| Hold | steady `80` — a presence, not a buzz |
-| Sigh top-up | 120 ms at `180` |
-| Free breathing | one 200 ms pulse at `90` every 11 s |
+| Inhale | pulsed at 2.5 Hz, envelope climbing pulse-peak by pulse-peak (`20 → 140` on a `t^0.8` curve) |
+| Exhale | the mirror: peaks falling, gaps opening |
+| Hold | **a firm double tap, then silence** — 80 ms taps 100 ms apart, nothing after |
+| Sigh top-up | one 120 ms pulse |
+| Free breathing | one 200 ms pulse every 11 s |
 
-Waveforms are emitted whole per phase (25–133 ms segments, capped at 60), so the ramp runs inside
-the vibrator HAL — it does not jitter with the UI thread, and the phase boundary lands exactly
-because each waveform's durations sum to the phase length.
+Every phase change is marked by a **1.6× longer first tap**, and pulse rate (2 / 2.5 / 3 Hz),
+duty (30%) and strength (default 55% of the reference amplitudes) are adjustable on the device
+and persisted there.
+
+Waveforms are emitted whole per phase, so the envelope runs inside the vibrator HAL — it does not
+jitter with the UI thread, and each phase starts on the beat because every waveform's durations
+sum to exactly the phase length. A hold deliberately goes quiet instead of buzzing through: you
+are not breathing, so nothing should be shaking, and the silence makes the next cue sharp.
 
 The app shows whether the device actually supports amplitude control
 (`Vibrator.hasAmplitudeControl()`). Without it, Android maps every non-zero amplitude to 100% and
