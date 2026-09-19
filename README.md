@@ -49,5 +49,17 @@ planned phase has a felt amplitude) without needing a device.
 ## Layout
 
 - `Patterns.kt` — the plan + waveform envelopes (pure Kotlin, unit-tested)
-- `MainActivity.kt` — slot picker, session engine, wake lock
+- `Schedules.kt` — slot wall-clock times + next-trigger maths (pure Kotlin, unit-tested)
+- `Reminders.kt` — daily `AlarmManager` reminders + notification channel + boot reschedule
+- `MainActivity.kt` — slot picker, session engine, reminder toggles, wake lock
 - `PatternsTest.kt` — envelope and total-length assertions
+- `SchedulesTest.kt` — reminder time and next-trigger assertions
+
+## Reminders
+
+A "Reminders" section sits below the session controls: a master on/off toggle plus one
+toggle per slot, persisted in `SharedPreferences`. When on, each slot fires a daily
+`AlarmManager.setInexactRepeating` alarm (inexact survives Doze and needs no special
+permission screen) that posts a notification; tapping it opens the app with that slot
+pre-selected. Reminders re-schedule after a reboot (`RECEIVE_BOOT_COMPLETED`). Android 13+
+asks for `POST_NOTIFICATIONS` on the first toggle tap.

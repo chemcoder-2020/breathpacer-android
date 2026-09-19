@@ -2,6 +2,8 @@ package dev.breathwork.pacer
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -27,12 +29,20 @@ import android.widget.TextView
  */
 class MainActivity : Activity() {
 
+    companion object {
+        /** Open intent extra: slot id to pre-select (from a reminder tap). */
+        const val EXTRA_SLOT = "dev.breathwork.pacer.SLOT"
+        private const val NOTIF_REQ = 5101
+    }
+
     private lateinit var vibrator: Vibrator
     private lateinit var status: TextView
     private lateinit var detail: TextView
     private lateinit var startStop: Button
     private lateinit var halfButton: Button
     private val slotButtons = ArrayList<Button>()
+    private lateinit var reminderMaster: Button
+    private val reminderButtons = ArrayList<Button>()
 
     private var selected = 2                     // 11:00 resonance - the anchor
     private var half = false
@@ -48,9 +58,23 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         vibrator = resolveVibrator()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Deep link from a reminder tap: pre-select that slot.
+        intent?.getStringExtra(EXTRA_SLOT)?.let { id ->
+            Patterns.SLOTS.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.let { selected = it }
+        }
         setContentView(buildUi())
         loadPrefs()
         refreshCapability()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra(EXTRA_SLOT)?.let { id ->
+            Patterns.SLOTS.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.let {
+                select(it)
+            }
+        }
     }
 
     private fun resolveVibrator(): Vibrator =
@@ -152,6 +176,37 @@ class MainActivity : Activity() {
         }
         root.addView(status)
 
+        root.addView(TextView(this).apply {
+            text = "Reminders"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setPadding(0, dp(22), 0, dp(4))
+        })
+        root.addView(TextView(this).apply {
+            text = "A daily notification per slot. Tap one to open that session."
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setPadding(0, 0, 0, dp(6))
+        })
+
+        reminderMaster = Button(this).apply {
+            isAllCaps = false
+            setOnClickListener { toggleMaster() }
+        }
+        root.addView(reminderMaster, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        reminderButtons.clear()
+        Patterns.SLOTS.forEachIndexed { i, slot ->
+            val b = Button(this).apply {
+                isAllCaps = false
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                setOnClickListener { toggleSlot(i) }
+            }
+            reminderButtons.add(b)
+            root.addView(b, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        refreshReminders()
+
         select(selected)
         return ScrollView(this).apply { addView(root) }
     }
@@ -168,6 +223,62 @@ class MainActivity : Activity() {
     }
 
     private fun prefs() = getSharedPreferences("breathpacer", MODE_PRIVATE)
+
+    // ---------------- Reminders ----------------
+
+    private fun toggleMaster() {
+        val on = !Reminders.isMasterOn(this)
+        if (on && Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIF_REQ)
+            return
+        }
+        Reminders.setMaster(this, on)
+        refreshReminders()
+    }
+
+    private fun toggleSlot(i: Int) {
+        val slot = Patterns.SLOTS[i]
+        if (!Reminders.isMasterOn(this)) {
+            // One tap enables everything when the master is off.
+            toggleMaster()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), NOTIF_REQ)
+            return
+        }
+        Reminders.setSlot(this, slot.id, !Reminders.isOn(this, slot.id))
+        refreshReminders()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == NOTIF_REQ &&
+            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        ) {
+            // The tap that triggered the prompt meant "on".
+            if (!Reminders.isMasterOn(this)) Reminders.setMaster(this, true)
+            refreshReminders()
+        }
+    }
+
+    private fun refreshReminders() {
+        val master = Reminders.isMasterOn(this)
+        reminderMaster.text = if (master) "🔔 Reminders ON — tap to pause all" else "🔕 Reminders OFF — tap to enable all"
+        Patterns.SLOTS.forEachIndexed { i, slot ->
+            val on = Reminders.isOn(this, slot.id)
+            reminderButtons[i].text = (if (on && master) "🔔 " else "◻ ") + "${slot.time}  ${slot.name}"
+            reminderButtons[i].alpha = if (on && master) 1f else 0.55f
+        }
+    }
 
     private fun loadPrefs() {
         scale = prefs().getFloat("scale", 0.55f).toDouble()
